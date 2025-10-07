@@ -8,8 +8,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ------------------------------------------------------
+# Fal.ai API ayarları
+# ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
-FAL_BASE_URL = "https://api.fal.ai/v1.0"
+# Seedream-v4 image-to-image endpoint
+FAL_BASE_URL = "https://api.fal.ai/v1/models/seedream-v4/image-to-image"
 
 app = FastAPI(title="AI Image Editor Backend")
 
@@ -34,7 +38,7 @@ def root():
     return {"message": "Backend is running"}
 
 # ------------------------------------------------------
-# FAL.AI API ile job oluşturma
+# Fal.ai API ile job oluşturma
 # ------------------------------------------------------
 @app.post("/api/jobs")
 async def create_job(image: UploadFile, prompt: str = Form(...)):
@@ -42,7 +46,7 @@ async def create_job(image: UploadFile, prompt: str = Form(...)):
     jobs[job_id] = {"status": "processing", "result_url": None}
 
     headers = {
-        "Authorization": f"Key {FAL_API_KEY}",
+        "Authorization": f"Bearer {FAL_API_KEY}"
     }
 
     form = aiohttp.FormData()
@@ -57,7 +61,7 @@ async def create_job(image: UploadFile, prompt: str = Form(...)):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{FAL_BASE_URL}/image/edit",
+                FAL_BASE_URL,
                 headers=headers,
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=120)

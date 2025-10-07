@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
@@ -6,8 +7,9 @@ import 'package:file_picker/file_picker.dart';
 void main() {
   runApp(MyApp());
 }
-
-const backendUrl = "https://<render-backend-url>/api";
+const local = "http://127.0.0.1:8000";
+ const prod = "https://ai-image-editor-web.onrender.com"; 
+ const backendUrl = "$prod/api";
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -17,6 +19,9 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter AI Image Editor',
       debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
       home: HomePage(),
     );
   }
@@ -37,19 +42,32 @@ class _HomePageState extends State<HomePage> {
   Future<void> pickImage() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
-      withData: true, // Web için gerekli
+      withData: true,
     );
 
     if (result != null && result.files.isNotEmpty) {
       setState(() {
         imageBytes = result.files.first.bytes;
         fileName = result.files.first.name;
+        resultUrl = null;
       });
     }
   }
 
   Future<void> uploadAndEdit() async {
-    if (imageBytes == null || promptController.text.isEmpty) return;
+    if (imageBytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select an image")),
+      );
+      return;
+    }
+
+    if (promptController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please enter a prompt")),
+      );
+      return;
+    }
 
     setState(() => loading = true);
 
@@ -59,47 +77,133 @@ class _HomePageState extends State<HomePage> {
     )
       ..fields['prompt'] = promptController.text
       ..files.add(
-        http.MultipartFile.fromBytes('image', imageBytes!, filename: fileName),
+        http.MultipartFile.fromBytes(
+          'image',
+          imageBytes!,
+          filename: fileName ?? 'image.png',
+        ),
       );
 
     try {
       final response = await request.send();
-      final resData = await response.stream.bytesToString();
+      final resStr = await response.stream.bytesToString();
+      final resJson = jsonDecode(resStr);
 
-      // Backend'den gelen gerçek URL'i buraya yerleştirin
-      setState(() {
-        loading = false;
-        resultUrl = "<backend-res-dönüşündeki-url>";
-      });
+      final jobId = resJson['job_id'];
+      if (jobId == null) throw Exception("Job ID not returned");
+
+      await pollJobResult(jobId);
     } catch (e) {
       setState(() => loading = false);
-      print("Upload error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Upload Error: $e")),
+      );
     }
+  }
+
+  Future<void> pollJobResult(String jobId) async {
+    const pollInterval = Duration(seconds: 2);
+    while (true) {
+      final res = await http.get(Uri.parse('$backendUrl/jobs/$jobId'));
+      if (res.statusCode != 200) {
+        setState(() => loading = false);
+        throw Exception("Failed to fetch job: ${res.body}");
+      }
+
+      final data = jsonDecode(res.body);
+      final status = data['status'];
+      if (status == 'done') {
+        setState(() {
+          resultUrl = data['result_url'];
+          loading = false;
+        });
+        break;
+      } else if (status == 'failed') {
+        setState(() => loading = false);
+        throw Exception("Job failed: ${data['error']}");
+      }
+      await Future.delayed(pollInterval);
+    }
+  }
+
+  Future<void> downloadImage() async {
+    if (resultUrl == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Open the image in a new tab to download")),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Flutter AI Image Editor')),
-      body: Padding(
+      appBar: AppBar(title: const Text('Flutter AI Image Editor')),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ElevatedButton(onPressed: pickImage, child: Text("Select Image")),
-            SizedBox(height: 10),
-            TextField(
-              controller: promptController,
-              decoration: InputDecoration(labelText: "Prompt"),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 600),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                GestureDetector(
+                  onTap: pickImage,
+                  child: Container(
+                    height: 180,
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Center(
+                      child: imageBytes != null
+                          ? Image.memory(imageBytes!, fit: BoxFit.contain)
+                          : const Text(
+                              "Click to select an image",
+                              style: TextStyle(color: Colors.blueGrey),
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: promptController,
+                  decoration: const InputDecoration(
+                    labelText: "Enter your prompt",
+                    border: OutlineInputBorder(),
+                  ),
+                  minLines: 1,
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: loading ? null : uploadAndEdit,
+                  icon: const Icon(Icons.edit),
+                  label: const Text("Generate / Edit"),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (loading) const Center(child: CircularProgressIndicator()),
+                if (resultUrl != null) ...[
+                  const SizedBox(height: 20),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(resultUrl!),
+                  ),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: downloadImage,
+                    icon: const Icon(Icons.download),
+                    label: const Text("Download"),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                  ),
+                ]
+              ],
             ),
-            SizedBox(height: 10),
-            ElevatedButton(onPressed: uploadAndEdit, child: Text("Generate/Edit")),
-            SizedBox(height: 20),
-            if (loading) CircularProgressIndicator(),
-            if (resultUrl != null) ...[
-              SizedBox(height: 20),
-              Image.network(resultUrl!)
-            ]
-          ],
+          ),
         ),
       ),
     );
