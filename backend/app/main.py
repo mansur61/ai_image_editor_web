@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 import aiohttp
 import os
 import uuid
@@ -8,12 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ------------------------------------------------------
-# Fal.ai API ayarları
-# ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
-
-# Seedream-v4 Edit modelinin doğru endpoint’i:
 FAL_API_URL = "https://fal.run/fal-ai/bytedance/seedream/v4/edit"
 
 app = FastAPI(title="AI Image Editor Backend")
@@ -23,11 +19,18 @@ app = FastAPI(title="AI Image Editor Backend")
 # ------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # frontend URL'ini buraya ekleyebilirsin
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------
+# Upload klasörü (geçici depolama)
+# ------------------------------------------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # ------------------------------------------------------
 # Basit in-memory job storage
@@ -38,9 +41,8 @@ jobs = {}
 def root():
     return {"message": "Backend is running"}
 
-
 # ------------------------------------------------------
-# Fal.ai API isteği oluşturma
+# Tek endpoint ile görsel ve prompt gönderme
 # ------------------------------------------------------
 @app.post("/api/jobs")
 async def create_job(
@@ -48,11 +50,6 @@ async def create_job(
     model: str = Form("image-to-image"),
     image: UploadFile = None
 ):
-    """
-    Seedream-v4 edit modeline prompt (ve opsiyonel görsel) gönderir.
-    model = "image-to-image" → Görsel yüklenmeli
-    model = "text-to-image" → Görsel olmadan üretim
-    """
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "processing",
@@ -62,35 +59,40 @@ async def create_job(
     }
 
     headers = {
-        "Authorization": f"Key {FAL_API_KEY}"
+        "Authorization": f"Key {FAL_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    form = aiohttp.FormData()
-    form.add_field("prompt", prompt)
-
-    # Görsel varsa ekle
+    # Eğer image-to-image model seçildiyse görsel gerekli
+    image_url = None
     if model == "image-to-image":
         if not image:
             jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
             return JSONResponse(status_code=400, content=jobs[job_id])
 
-        form.add_field(
-            "image",
-            await image.read(),
-            filename=image.filename,
-            content_type=image.content_type
-        )
+        # Görseli uploads klasörüne kaydet
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{image.filename}")
+        with open(file_path, "wb") as f:
+            f.write(await image.read())
+
+        # Local URL oluştur
+        image_url = f"http://localhost:8000/uploads/{file_id}_{image.filename}"
+
+    # Fal.ai payload
+    payload = {"input": {"prompt": prompt}}
+    if image_url:
+        payload["input"]["image_url"] = image_url
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 FAL_API_URL,
                 headers=headers,
-                data=form,
+                json=payload,
                 timeout=aiohttp.ClientTimeout(total=120)
             ) as response:
 
-                # Fal API yanıtını kontrol et
                 if response.status != 200:
                     error_text = await response.text()
                     jobs[job_id] = {
@@ -101,9 +103,9 @@ async def create_job(
 
                 data = await response.json()
                 result_url = (
-                    data.get("image") or
-                    data.get("output", {}).get("image_url") or
-                    data.get("images", [{}])[0].get("url")
+                    data.get("image")
+                    or data.get("output", {}).get("image_url")
+                    or data.get("images", [{}])[0].get("url")
                 )
 
                 jobs[job_id] = {
@@ -114,14 +116,9 @@ async def create_job(
                 }
 
     except Exception as e:
-        jobs[job_id] = {
-            "status": "failed",
-            "error": str(e),
-            "model": model
-        }
+        jobs[job_id] = {"status": "failed", "error": str(e), "model": model}
 
     return {"job_id": job_id}
-
 
 # ------------------------------------------------------
 # Job durumu sorgulama
@@ -132,7 +129,6 @@ def get_job(job_id: str):
     if not job:
         return JSONResponse(status_code=404, content={"error": "Job not found"})
     return job
-
 
 # ------------------------------------------------------
 # Tüm jobları listeleme
