@@ -12,8 +12,10 @@ load_dotenv()
 # Fal.ai API ayarları
 # ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
-# Seedream-v4 image-to-image endpoint
-FAL_BASE_URL = "https://api.fal.ai/v1/models/seedream-v4/image-to-image"
+
+# Seedream-v4 modelleri
+IMAGE_TO_IMAGE_URL = "https://api.fal.ai/v1/models/seedream-v4/image-to-image"
+TEXT_TO_IMAGE_URL = "https://api.fal.ai/v1/models/seedream-v4/text-to-image"
 
 app = FastAPI(title="AI Image Editor Backend")
 
@@ -22,7 +24,7 @@ app = FastAPI(title="AI Image Editor Backend")
 # ------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # frontend domainini buraya ekle (örn. Firebase URL)
+    allow_origins=["*"],  # frontend URL eklenebilir
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,17 +35,31 @@ app.add_middleware(
 # ------------------------------------------------------
 jobs = {}
 
+# ------------------------------------------------------
+# Root endpoint
+# ------------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Backend is running"}
 
 # ------------------------------------------------------
-# Fal.ai API ile job oluşturma
+# Job oluşturma (Image-to-Image)
 # ------------------------------------------------------
 @app.post("/api/jobs")
-async def create_job(image: UploadFile, prompt: str = Form(...)):
+async def create_job(
+    image: UploadFile = None, 
+    prompt: str = Form(...),
+    model: str = Form("image-to-image")  # opsiyonel: "text-to-image"
+):
+    """
+    Seedream-v4 modeli ile görsel düzenleme veya text-to-image.
+    `model` parametresi ile seçilebilir.
+    """
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "processing", "result_url": None}
+    jobs[job_id] = {"status": "processing", "result_url": None, "prompt": prompt, "model": model}
+
+    # Hangi endpoint kullanılacak
+    endpoint_url = IMAGE_TO_IMAGE_URL if model == "image-to-image" else TEXT_TO_IMAGE_URL
 
     headers = {
         "Authorization": f"Bearer {FAL_API_KEY}"
@@ -51,21 +67,27 @@ async def create_job(image: UploadFile, prompt: str = Form(...)):
 
     form = aiohttp.FormData()
     form.add_field("prompt", prompt)
-    form.add_field(
-        "image",
-        await image.read(),
-        filename=image.filename,
-        content_type=image.content_type
-    )
+
+    if model == "image-to-image":
+        if not image:
+            jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
+            return JSONResponse(status_code=400, content=jobs[job_id])
+        form.add_field(
+            "image",
+            await image.read(),
+            filename=image.filename,
+            content_type=image.content_type
+        )
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                FAL_BASE_URL,
+                endpoint_url,
                 headers=headers,
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=120)
             ) as response:
+
                 if response.status != 200:
                     error_text = await response.text()
                     jobs[job_id] = {
@@ -75,17 +97,21 @@ async def create_job(image: UploadFile, prompt: str = Form(...)):
                     return JSONResponse(status_code=response.status, content=jobs[job_id])
 
                 data = await response.json()
+                # Modelden dönen görsel URL'sini al
                 result_url = data.get("image") or data.get("output", {}).get("image_url")
 
                 jobs[job_id] = {
                     "status": "done",
                     "result_url": result_url,
                     "prompt": prompt,
+                    "model": model,
                 }
+
     except Exception as e:
         jobs[job_id] = {
             "status": "failed",
             "error": str(e),
+            "model": model,
         }
 
     return {"job_id": job_id}
@@ -101,7 +127,7 @@ def get_job(job_id: str):
     return job
 
 # ------------------------------------------------------
-# Job listesi
+# Tüm jobları listeleme
 # ------------------------------------------------------
 @app.get("/api/jobs")
 def list_jobs():
