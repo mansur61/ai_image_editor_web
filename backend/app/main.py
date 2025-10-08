@@ -1,7 +1,6 @@
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 import aiohttp
 import os
 import uuid
@@ -14,11 +13,6 @@ load_dotenv()
 # ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 FAL_API_URL = "https://fal.run/fal-ai/bytedance/seedream/v4/edit"
-
-# ------------------------------------------------------
-# Render domain’iniz (kendi domain’iniz ile değiştirin)
-# ------------------------------------------------------
-RENDER_BASE_URL = "https://ai-image-editor-web.onrender.com"
 
 app = FastAPI(title="AI Image Editor Backend")
 
@@ -34,26 +28,16 @@ app.add_middleware(
 )
 
 # ------------------------------------------------------
-# Upload klasörü
-# ------------------------------------------------------
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-
-# ------------------------------------------------------
 # Basit in-memory job storage
 # ------------------------------------------------------
 jobs = {}
 
-# ------------------------------------------------------
-# Root
-# ------------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Backend is running"}
 
 # ------------------------------------------------------
-# Job oluşturma endpoint
+# Job oluşturma endpoint (memory üzerinden dosya gönderme)
 # ------------------------------------------------------
 @app.post("/api/jobs")
 async def create_job(
@@ -65,37 +49,31 @@ async def create_job(
     jobs[job_id] = {"status": "processing", "prompt": prompt, "model": model, "result_url": None}
 
     headers = {
-        "Authorization": f"Key {FAL_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Key {FAL_API_KEY}"
     }
-
-    # Görsel URL’i
-    image_url = None
-    if model == "image-to-image":
-        if not image:
-            jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
-            return {"job_id": job_id, **jobs[job_id]}
-
-        # Görseli kaydet
-        file_id = str(uuid.uuid4())
-        file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{image.filename}")
-        with open(file_path, "wb") as f:
-            f.write(await image.read())
-
-        # Render domain ile public URL oluştur
-        image_url = f"{RENDER_BASE_URL}/uploads/{file_id}_{image.filename}"
-
-    # Fal.ai payload
-    payload = {"input": {"prompt": prompt}}
-    if image_url:
-        payload["input"]["image_urls"] = [image_url]
 
     try:
         async with aiohttp.ClientSession() as session:
+            form = aiohttp.FormData()
+            form.add_field("prompt", prompt)
+
+            # Eğer image-to-image ise dosya ekle
+            if model == "image-to-image":
+                if not image:
+                    jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
+                    return {"job_id": job_id, **jobs[job_id]}
+
+                form.add_field(
+                    "image",
+                    await image.read(),
+                    filename=image.filename,
+                    content_type=image.content_type
+                )
+
             async with session.post(
                 FAL_API_URL,
                 headers=headers,
-                json=payload,
+                data=form,
                 timeout=aiohttp.ClientTimeout(total=120)
             ) as response:
 
