@@ -110,8 +110,7 @@ Bilinen Kısıtlar / Notlar:
 - Render üzerindeki uploads klasörü geçici depolama için kullanılır; uzun süreli saklama yok,
 fakat kullanılmadı her renderda veri kaybı olmaktadır. Base64 olarak verile fal.ai gönderildi.
 - Base64 gönderim tercih edildi, fiziksel URL gerekmez
-- Job history in-memory, veritabanı eklenmedi (opsiyonel) 
-(supabase düşünüldü fakat mesaiden sonra müsait olamadım)
+- Job history in-memory, veritabanı eklenmedi (opsiyonel)  
 
 AI Araçları Kullanımı:
 - ChatGPT kullanıldı 
