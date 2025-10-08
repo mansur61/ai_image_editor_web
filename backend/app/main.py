@@ -72,7 +72,8 @@ app.add_middleware(
 async def create_job(
     prompt: str = Form(...),
     model: str = Form("image-to-image"),
-    image: UploadFile = None
+    image: UploadFile = None,
+    image_url: str = Form(None)
 ):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -82,26 +83,30 @@ async def create_job(
         "result_url": None
     }
 
-    if model != "image-to-image" or not image:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = "Image file required for image-to-image."
-        return {"job_id": job_id, **jobs[job_id]}
-
-    # ✅ Görseli base64 olarak encode et
-    image_bytes = await image.read()
-    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-    image_data_uri = f"data:{image.content_type};base64,{image_base64}"
-
-    # ✅ Fal.ai'nin beklediği format
-    payload = {
-        "prompt": prompt,
-        "model": model,
-        "image_urls": [image_data_uri]
-    }
-
     headers = {
         "Authorization": f"Key {FAL_API_KEY}",
         "Content-Type": "application/json"
+    }
+
+    # ✅ Eğer dosya varsa base64 data URI oluştur
+    if image:
+        image_bytes = await image.read()
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_data_uri = f"data:{image.content_type};base64,{image_base64}"
+        image_urls = [image_data_uri]
+    elif image_url:
+        # ✅ Eğer dosya yok ama URL geldiyse direkt onu kullan
+        image_urls = [image_url]
+    else:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = "Image or image_url is required."
+        return {"job_id": job_id, **jobs[job_id]}
+
+    # ✅ Fal.ai’nin beklediği payload
+    payload = {
+        "prompt": prompt,
+        "model": model,
+        "image_urls": image_urls
     }
 
     try:
