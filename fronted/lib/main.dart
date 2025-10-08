@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:html' as html;
@@ -112,13 +113,15 @@ class _HomePageState extends State<HomePage> {
           );
         });
       } else {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("No image returned")));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("No image returned")));
       }
     } catch (e) {
       print("Error: $e");
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Upload Error: $e")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Upload Error: $e")));
     } finally {
       setState(() => loading = false);
     }
@@ -146,127 +149,153 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
- 
 
   Widget buildComparisonSlider(String originalUrl, String resultUrl) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        double sliderPosition = constraints.maxWidth / 2;
-        return StatefulBuilder(builder: (context, setState) {
-          return GestureDetector(
-            onHorizontalDragUpdate: (details) {
-              setState(() {
-                sliderPosition += details.delta.dx;
-                if (sliderPosition < 0) sliderPosition = 0;
-                if (sliderPosition > constraints.maxWidth)
-                  sliderPosition = constraints.maxWidth;
-              });
-            },
-            child: Stack(
-              children: [
-                Image.network(
-                  originalUrl,
-                  width: constraints.maxWidth,
-                  height: 200,
-                  fit: BoxFit.cover,
-                ),
-                ClipRect(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: sliderPosition / constraints.maxWidth,
-                    child: Image.network(
-                      resultUrl,
-                      width: constraints.maxWidth,
-                      height: 200,
-                      fit: BoxFit.cover,
+    return FutureBuilder(
+      future: _getImageSize(originalUrl),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final aspectRatio = snapshot.data!;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            double sliderPosition = constraints.maxWidth / 2;
+            return StatefulBuilder(
+              builder: (context, setState) {
+                return AspectRatio(
+                  aspectRatio: aspectRatio,
+                  child: GestureDetector(
+                    onHorizontalDragUpdate: (details) {
+                      setState(() {
+                        sliderPosition += details.delta.dx;
+                        if (sliderPosition < 0) sliderPosition = 0;
+                        if (sliderPosition > constraints.maxWidth) {
+                          sliderPosition = constraints.maxWidth;
+                        }
+                      });
+                    },
+                    child: Stack(
+                      children: [
+                        Image.network(
+                          originalUrl,
+                          width: constraints.maxWidth,
+                          fit: BoxFit.contain,
+                        ),
+                        ClipRect(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            widthFactor: sliderPosition / constraints.maxWidth,
+                            child: Image.network(
+                              resultUrl,
+                              width: constraints.maxWidth,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: sliderPosition - 2,
+                          top: 0,
+                          bottom: 0,
+                          child: Container(width: 4, color: Colors.blueAccent),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                Positioned(
-                  left: sliderPosition - 3,
-                  top: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 3,
-                    color: Colors.blue,
-                  ),
-                ),
-              ],
-            ),
-          );
-        });
+                );
+              },
+            );
+          },
+        );
       },
     );
   }
 
-Widget buildComparisonJob(Job job) {
-  final formattedDate =
-      "${job.createdAt.day.toString().padLeft(2, '0')}-${job.createdAt.month.toString().padLeft(2, '0')}-${job.createdAt.year} ${job.createdAt.hour.toString().padLeft(2, '0')}:${job.createdAt.minute.toString().padLeft(2, '0')}";
-
-  List<Widget> comparisonWidgets = [];
-
-  for (int i = 0; i < imagesBytes.length; i++) {
-    String original = "data:image/png;base64," + base64Encode(imagesBytes[i]);
-    String result = job.imageUrls[i];
-
-    comparisonWidgets.add(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          buildComparisonSlider(original, result),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween, // Sol ve sağa hizala
-            children: [
-              Text(
-                "Yüklenme tarihi: $formattedDate",
-                style: const TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-              IconButton(
-                icon: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  padding: const EdgeInsets.all(4),
-                  child: const Icon(
-                    Icons.download,
-                    color: Colors.blue,
-                    size: 20,
-                  ),
-                ),
-                onPressed: () async {
-                  final response = await http.get(Uri.parse(result));
-                  final blob = html.Blob([response.bodyBytes]);
-                  final urlBlob = html.Url.createObjectUrlFromBlob(blob);
-                  final _ = html.AnchorElement(href: urlBlob)
-                    ..download = result.split('/').last
-                    ..click();
-                  html.Url.revokeObjectUrl(urlBlob);
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
+  /// Görselin oranını hesaplar (genişlik / yükseklik)
+  Future<double> _getImageSize(String imageUrl) async {
+    final completer = Completer<double>();
+    final image = Image.network(imageUrl);
+    image.image
+        .resolve(const ImageConfiguration())
+        .addListener(
+          ImageStreamListener((info, _) {
+            final ratio =
+                info.image.width.toDouble() / info.image.height.toDouble();
+            completer.complete(ratio);
+          }),
+        );
+    return completer.future;
   }
 
-  return Column(children: comparisonWidgets);
-}
+  Widget buildComparisonJob(Job job) {
+    final formattedDate =
+        "${job.createdAt.day.toString().padLeft(2, '0')}-${job.createdAt.month.toString().padLeft(2, '0')}-${job.createdAt.year} ${job.createdAt.hour.toString().padLeft(2, '0')}:${job.createdAt.minute.toString().padLeft(2, '0')}";
+
+    List<Widget> comparisonWidgets = [];
+
+    for (int i = 0; i < imagesBytes.length; i++) {
+      String original = "data:image/png;base64," + base64Encode(imagesBytes[i]);
+      String result = job.imageUrls[i];
+
+      comparisonWidgets.add(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            buildComparisonSlider(original, result),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment:
+                  MainAxisAlignment.spaceBetween, // Sol ve sağa hizala
+              children: [
+                Text(
+                  "Yüklenme tarihi: $formattedDate",
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                IconButton(
+                  icon: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    padding: const EdgeInsets.all(4),
+                    child: const Icon(
+                      Icons.download,
+                      color: Colors.blue,
+                      size: 20,
+                    ),
+                  ),
+                  onPressed: () async {
+                    final response = await http.get(Uri.parse(result));
+                    final blob = html.Blob([response.bodyBytes]);
+                    final urlBlob = html.Url.createObjectUrlFromBlob(blob);
+                    final _ = html.AnchorElement(href: urlBlob)
+                      ..download = result.split('/').last
+                      ..click();
+                    html.Url.revokeObjectUrl(urlBlob);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      );
+    }
+
+    return Column(children: comparisonWidgets);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("AI Image Editor")),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 600),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 600),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: ListView(
               children: [
                 GestureDetector(
                   onTap: pickImages,
@@ -319,11 +348,10 @@ Widget buildComparisonJob(Job job) {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                Column(
-                  children: jobHistory
-                      .map((job) => buildComparisonJob(job))
-                      .toList(),
-                ),
+
+                // 🔽 Job history scrollable
+                if (jobHistory.isEmpty) const Text("No jobs yet."),
+                ...jobHistory.map((job) => buildComparisonJob(job)).toList(),
               ],
             ),
           ),
