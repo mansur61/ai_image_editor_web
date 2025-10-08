@@ -44,6 +44,30 @@ def root():
 # ------------------------------------------------------
 # Job oluşturma endpoint (memory üzerinden dosya gönderme)
 # ------------------------------------------------------
+import base64
+from fastapi import FastAPI, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import aiohttp
+import os
+import uuid
+from dotenv import load_dotenv
+
+load_dotenv()
+
+FAL_API_KEY = os.getenv("FAL_API_KEY")
+FAL_API_URL = "https://fal.run/fal-ai/bytedance/seedream/v4/edit"
+
+app = FastAPI(title="AI Image Editor Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.post("/api/jobs")
 async def create_job(
     prompt: str = Form(...),
@@ -51,58 +75,49 @@ async def create_job(
     image: UploadFile = None
 ):
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "processing", "prompt": prompt, "model": model, "result_url": None}
+
+    if not image:
+        return JSONResponse(status_code=400, content={"error": "Image file required."})
+
+    image_bytes = await image.read()
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    image_data_uri = f"data:{image.content_type};base64,{image_base64}"
+
+    payload = {
+        "input": {
+            "prompt": prompt,
+            "image_url": image_data_uri
+        }
+    }
 
     headers = {
         "Authorization": f"Key {FAL_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    if model == "image-to-image":
-        if not image:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = "Image file required for image-to-image."
-            return {"job_id": job_id, **jobs[job_id]}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                FAL_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120)
+            ) as response:
 
-        # Görseli byte olarak oku
-        image_bytes = await image.read()
+                text = await response.text()
+                print("Raw Response:", text)
 
-        # Byte verisini base64 formatına dönüştür
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        image_data_uri = f"data:{image.content_type};base64,{image_base64}"
+                if response.status != 200:
+                    return JSONResponse(status_code=response.status, content={"error": text})
 
-        # JSON payload
-        payload = {
-            "prompt": prompt,
-            "image_urls": [image_data_uri]
-        }
+                data = await response.json()
+                image_url = data.get("image") or data.get("output", {}).get("image_url")
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    FAL_API_URL,
-                    headers=headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
+                return {"job_id": job_id, "status": "done", "result_url": image_url}
 
-                    if response.status != 200:
-                        error_text = await response.text()
-                        jobs[job_id]["status"] = "failed"
-                        jobs[job_id]["error"] = f"Fal.ai error: {error_text}"
-                        return {"job_id": job_id, **jobs[job_id]}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
-                    data = await response.json()
-                    result_url = data.get("image") or data.get("output", {}).get("image_url") or data.get("images", [{}])[0].get("url")
-                    jobs[job_id]["status"] = "done"
-                    jobs[job_id]["result_url"] = result_url
-
-        except Exception as e:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(e)
-            return {"job_id": job_id, **jobs[job_id]}
-
-    return {"job_id": job_id, **jobs[job_id]}
 
 # ------------------------------------------------------
 # Job durumu sorgulama
