@@ -13,7 +13,8 @@ load_dotenv()
 # Fal.ai API ayarları
 # ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
-FAL_API_URL = "https://fal.run/fal-ai/bytedance/seedream/v4/edit"
+# Fal.ai dökümana göre API endpoint:
+FAL_API_URL = "https://fal.ai/models/fal-ai/bytedance/seedream/v4/edit/api"
 
 app = FastAPI(title="AI Image Editor Backend")
 
@@ -33,6 +34,9 @@ app.add_middleware(
 # ------------------------------------------------------
 jobs = {}
 
+# ------------------------------------------------------
+# Root
+# ------------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Backend is running"}
@@ -47,12 +51,19 @@ async def create_job(
     image: UploadFile = None
 ):
     job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing", "prompt": prompt, "model": model, "result_url": None}
+
     headers = {
         "Authorization": f"Key {FAL_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    if model == "image-to-image" and image:
+    if model == "image-to-image":
+        if not image:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = "Image file required for image-to-image."
+            return {"job_id": job_id, **jobs[job_id]}
+
         # Görseli byte olarak oku
         image_bytes = await image.read()
 
@@ -77,18 +88,22 @@ async def create_job(
 
                     if response.status != 200:
                         error_text = await response.text()
-                        return JSONResponse(status_code=400, content={"error": f"Fal.ai error: {error_text}"})
+                        jobs[job_id]["status"] = "failed"
+                        jobs[job_id]["error"] = f"Fal.ai error: {error_text}"
+                        return {"job_id": job_id, **jobs[job_id]}
 
                     data = await response.json()
                     result_url = data.get("image") or data.get("output", {}).get("image_url") or data.get("images", [{}])[0].get("url")
-
-                    return {"job_id": job_id, "status": "done", "result_url": result_url}
+                    jobs[job_id]["status"] = "done"
+                    jobs[job_id]["result_url"] = result_url
 
         except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(e)
+            return {"job_id": job_id, **jobs[job_id]}
 
-    else:
-        return JSONResponse(status_code=400, content={"error": "Image file required for image-to-image."})
+    return {"job_id": job_id, **jobs[job_id]}
+
 # ------------------------------------------------------
 # Job durumu sorgulama
 # ------------------------------------------------------
