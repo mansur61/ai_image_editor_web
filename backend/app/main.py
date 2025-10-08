@@ -9,32 +9,52 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ------------------------------------------------------
+# Fal.ai API ayarları
+# ------------------------------------------------------
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 FAL_API_URL = "https://fal.run/fal-ai/bytedance/seedream/v4/edit"
 
+# ------------------------------------------------------
+# Render domain’iniz (kendi domain’iniz ile değiştirin)
+# ------------------------------------------------------
+RENDER_BASE_URL = "https://ai-image-editor-web.onrender.com"
+
 app = FastAPI(title="AI Image Editor Backend")
 
+# ------------------------------------------------------
 # CORS ayarları
+# ------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # frontend domaini ekleyebilirsiniz
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ------------------------------------------------------
 # Upload klasörü
+# ------------------------------------------------------
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# In-memory job storage
+# ------------------------------------------------------
+# Basit in-memory job storage
+# ------------------------------------------------------
 jobs = {}
 
+# ------------------------------------------------------
+# Root
+# ------------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "Backend is running"}
 
+# ------------------------------------------------------
+# Job oluşturma endpoint
+# ------------------------------------------------------
 @app.post("/api/jobs")
 async def create_job(
     prompt: str = Form(...),
@@ -49,11 +69,12 @@ async def create_job(
         "Content-Type": "application/json"
     }
 
+    # Görsel URL’i
     image_url = None
     if model == "image-to-image":
         if not image:
             jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
-            return JSONResponse(status_code=400, content=jobs[job_id])
+            return {"job_id": job_id, **jobs[job_id]}
 
         # Görseli kaydet
         file_id = str(uuid.uuid4())
@@ -61,12 +82,13 @@ async def create_job(
         with open(file_path, "wb") as f:
             f.write(await image.read())
 
-        image_url = f"http://localhost:8000/uploads/{file_id}_{image.filename}"
+        # Render domain ile public URL oluştur
+        image_url = f"{RENDER_BASE_URL}/uploads/{file_id}_{image.filename}"
 
     # Fal.ai payload
-    payload = {"prompt": prompt}
+    payload = {"input": {"prompt": prompt}}
     if image_url:
-        payload["image_urls"] = [image_url]
+        payload["input"]["image_urls"] = [image_url]
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -80,18 +102,26 @@ async def create_job(
                 if response.status != 200:
                     error_text = await response.text()
                     jobs[job_id] = {"status": "failed", "error": f"fal.ai error: {error_text}"}
-                    return JSONResponse(status_code=response.status, content=jobs[job_id])
+                    return {"job_id": job_id, **jobs[job_id]}
 
                 data = await response.json()
-                result_url = data.get("image") or data.get("output", {}).get("image_url") or data.get("images", [{}])[0].get("url")
+                result_url = (
+                    data.get("image")
+                    or data.get("output", {}).get("image_url")
+                    or data.get("images", [{}])[0].get("url")
+                )
 
                 jobs[job_id] = {"status": "done", "result_url": result_url, "prompt": prompt, "model": model}
 
     except Exception as e:
         jobs[job_id] = {"status": "failed", "error": str(e), "model": model}
+        return {"job_id": job_id, **jobs[job_id]}
 
-    return {"job_id": job_id}
+    return {"job_id": job_id, **jobs[job_id]}
 
+# ------------------------------------------------------
+# Job durumu sorgulama
+# ------------------------------------------------------
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
     job = jobs.get(job_id)
@@ -99,6 +129,9 @@ def get_job(job_id: str):
         return JSONResponse(status_code=404, content={"error": "Job not found"})
     return job
 
+# ------------------------------------------------------
+# Tüm jobları listeleme
+# ------------------------------------------------------
 @app.get("/api/jobs")
 def list_jobs():
     return jobs
