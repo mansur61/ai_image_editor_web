@@ -1,3 +1,4 @@
+import base64
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -46,57 +47,48 @@ async def create_job(
     image: UploadFile = None
 ):
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "processing", "prompt": prompt, "model": model, "result_url": None}
-
     headers = {
-        "Authorization": f"Key {FAL_API_KEY}"
+        "Authorization": f"Key {FAL_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            form = aiohttp.FormData()
-            form.add_field("prompt", prompt)
+    if model == "image-to-image" and image:
+        # Görseli byte olarak oku
+        image_bytes = await image.read()
 
-            # Eğer image-to-image ise dosya ekle
-            if model == "image-to-image":
-                if not image:
-                    jobs[job_id] = {"status": "failed", "error": "Image file required for image-to-image."}
-                    return {"job_id": job_id, **jobs[job_id]}
+        # Byte verisini base64 formatına dönüştür
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_data_uri = f"data:{image.content_type};base64,{image_base64}"
 
-                form.add_field(
-                    "image",
-                    await image.read(),
-                    filename=image.filename,
-                    content_type=image.content_type
-                )
+        # JSON payload
+        payload = {
+            "prompt": prompt,
+            "image_urls": [image_data_uri]
+        }
 
-            async with session.post(
-                FAL_API_URL,
-                headers=headers,
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=120)
-            ) as response:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    FAL_API_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
 
-                if response.status != 200:
-                    error_text = await response.text()
-                    jobs[job_id] = {"status": "failed", "error": f"fal.ai error: {error_text}"}
-                    return {"job_id": job_id, **jobs[job_id]}
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return JSONResponse(status_code=400, content={"error": f"Fal.ai error: {error_text}"})
 
-                data = await response.json()
-                result_url = (
-                    data.get("image")
-                    or data.get("output", {}).get("image_url")
-                    or data.get("images", [{}])[0].get("url")
-                )
+                    data = await response.json()
+                    result_url = data.get("image") or data.get("output", {}).get("image_url") or data.get("images", [{}])[0].get("url")
 
-                jobs[job_id] = {"status": "done", "result_url": result_url, "prompt": prompt, "model": model}
+                    return {"job_id": job_id, "status": "done", "result_url": result_url}
 
-    except Exception as e:
-        jobs[job_id] = {"status": "failed", "error": str(e), "model": model}
-        return {"job_id": job_id, **jobs[job_id]}
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": str(e)})
 
-    return {"job_id": job_id, **jobs[job_id]}
-
+    else:
+        return JSONResponse(status_code=400, content={"error": "Image file required for image-to-image."})
 # ------------------------------------------------------
 # Job durumu sorgulama
 # ------------------------------------------------------
