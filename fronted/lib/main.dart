@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:http_parser/http_parser.dart';
 
+import 'model/job.dart';
+
 void main() {
   runApp(const MyApp());
 }
@@ -27,14 +29,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class Job {
-  final String prompt;
-  final String imageUrl;
-  final DateTime createdAt;
-
-  Job({required this.prompt, required this.imageUrl, required this.createdAt});
-}
-
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -48,12 +42,11 @@ class _HomePageState extends State<HomePage> {
 
   List<Uint8List> imagesBytes = [];
   List<String> fileNames = [];
-  String? resultUrl;
+  List<String> resultUrls = [];
   bool loading = false;
 
   List<Job> jobHistory = [];
 
-  // Çoklu dosya seçimi
   Future<void> pickImages() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
@@ -64,19 +57,20 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         imagesBytes = result.files.map((f) => f.bytes!).toList();
         fileNames = result.files.map((f) => f.name).toList();
-        imageUrlController.clear();
-        resultUrl = null;
+        resultUrls.clear();
       });
       print("🖼 ${imagesBytes.length} images selected: $fileNames");
     }
   }
 
-  // Backend’e gönderim
   Future<void> uploadAndEdit() async {
     if (promptController.text.isEmpty) return;
     if (imagesBytes.isEmpty && imageUrlController.text.isEmpty) return;
 
-    setState(() => loading = true);
+    setState(() {
+      loading = true;
+      jobHistory = [];
+    });
 
     try {
       final uri = Uri.parse('$backendUrl/jobs');
@@ -84,7 +78,6 @@ class _HomePageState extends State<HomePage> {
       request.fields['prompt'] = promptController.text;
       request.fields['model'] = 'image-to-image';
 
-      // Çoklu resimleri ekle
       for (int i = 0; i < imagesBytes.length; i++) {
         request.files.add(
           http.MultipartFile.fromBytes(
@@ -105,16 +98,15 @@ class _HomePageState extends State<HomePage> {
       final resJson = jsonDecode(response.body);
       print("📩 resJson: $resJson");
 
-      final urls = resJson['result_urls'] as List<dynamic>? ?? [];
+      final urls = List<String>.from(resJson['result_urls'] ?? []);
       if (urls.isNotEmpty) {
         setState(() {
-          resultUrl = urls[0]; // ilk resmi göster
-          // job history ekle
+          resultUrls = urls;
           jobHistory.insert(
             0,
             Job(
               prompt: promptController.text,
-              imageUrl: urls[0],
+              imageUrls: urls,
               createdAt: DateTime.now(),
             ),
           );
@@ -132,7 +124,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Seçilen resimleri yatay preview
   Widget buildSelectedImages() {
     if (imagesBytes.isEmpty) return const SizedBox.shrink();
     return SizedBox(
@@ -155,46 +146,115 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+ 
 
-  // Resmi gösterme ve indirme
-  Widget buildResultImage(String imageUrl, DateTime date) {
-    final formattedDate =
-        "${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Stack(
-          alignment: Alignment.topRight,
-          children: [
-            Image.network(
-              imageUrl,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: 300,
+  Widget buildComparisonSlider(String originalUrl, String resultUrl) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        double sliderPosition = constraints.maxWidth / 2;
+        return StatefulBuilder(builder: (context, setState) {
+          return GestureDetector(
+            onHorizontalDragUpdate: (details) {
+              setState(() {
+                sliderPosition += details.delta.dx;
+                if (sliderPosition < 0) sliderPosition = 0;
+                if (sliderPosition > constraints.maxWidth)
+                  sliderPosition = constraints.maxWidth;
+              });
+            },
+            child: Stack(
+              children: [
+                Image.network(
+                  originalUrl,
+                  width: constraints.maxWidth,
+                  height: 200,
+                  fit: BoxFit.cover,
+                ),
+                ClipRect(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: sliderPosition / constraints.maxWidth,
+                    child: Image.network(
+                      resultUrl,
+                      width: constraints.maxWidth,
+                      height: 200,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: sliderPosition - 3,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 3,
+                    color: Colors.blue,
+                  ),
+                ),
+              ],
             ),
-            IconButton(
-              icon: const Icon(Icons.download, color: Colors.white),
-              onPressed: () async {
-                final response = await http.get(Uri.parse(imageUrl));
-                final blob = html.Blob([response.bodyBytes]);
-                final url = html.Url.createObjectUrlFromBlob(blob);
-                final anchor = html.AnchorElement(href: url)
-                  ..download = imageUrl.split('/').last
-                  ..click();
-                html.Url.revokeObjectUrl(url);
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(
-          "Yüklenme tarihi: $formattedDate",
-          style: const TextStyle(fontSize: 12, color: Colors.grey),
-        ),
-      ],
+          );
+        });
+      },
     );
   }
+
+Widget buildComparisonJob(Job job) {
+  final formattedDate =
+      "${job.createdAt.day.toString().padLeft(2, '0')}-${job.createdAt.month.toString().padLeft(2, '0')}-${job.createdAt.year} ${job.createdAt.hour.toString().padLeft(2, '0')}:${job.createdAt.minute.toString().padLeft(2, '0')}";
+
+  List<Widget> comparisonWidgets = [];
+
+  for (int i = 0; i < imagesBytes.length; i++) {
+    String original = "data:image/png;base64," + base64Encode(imagesBytes[i]);
+    String result = job.imageUrls[i];
+
+    comparisonWidgets.add(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          buildComparisonSlider(original, result),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween, // Sol ve sağa hizala
+            children: [
+              Text(
+                "Yüklenme tarihi: $formattedDate",
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              IconButton(
+                icon: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  padding: const EdgeInsets.all(4),
+                  child: const Icon(
+                    Icons.download,
+                    color: Colors.blue,
+                    size: 20,
+                  ),
+                ),
+                onPressed: () async {
+                  final response = await http.get(Uri.parse(result));
+                  final blob = html.Blob([response.bodyBytes]);
+                  final urlBlob = html.Url.createObjectUrlFromBlob(blob);
+                  final _ = html.AnchorElement(href: urlBlob)
+                    ..download = result.split('/').last
+                    ..click();
+                  html.Url.revokeObjectUrl(urlBlob);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  return Column(children: comparisonWidgets);
+}
 
   @override
   Widget build(BuildContext context) {
@@ -208,7 +268,6 @@ class _HomePageState extends State<HomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // GestureDetector içinde hem tıklama hem local preview
                 GestureDetector(
                   onTap: pickImages,
                   child: Container(
@@ -253,21 +312,16 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 16),
                 if (loading) const Center(child: CircularProgressIndicator()),
                 const SizedBox(height: 20),
-                // Son işlem resmi
-                if (resultUrl != null) buildResultImage(resultUrl!, DateTime.now()),
-                const SizedBox(height: 20),
-                // Job history
                 const Divider(),
                 const SizedBox(height: 8),
-                const Text("Job History",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const Text(
+                  "Job History",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 8),
                 Column(
                   children: jobHistory
-                      .map((job) => Padding(
-                            padding: const EdgeInsets.only(bottom: 16),
-                            child: buildResultImage(job.imageUrl, job.createdAt),
-                          ))
+                      .map((job) => buildComparisonJob(job))
                       .toList(),
                 ),
               ],

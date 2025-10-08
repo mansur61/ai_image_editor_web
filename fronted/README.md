@@ -21,15 +21,16 @@ Kullanılan Teknolojiler:
 - Responsive tasarım
 
 Özellikler:
-- Görsel Yükleme Alanı: Kullanıcıdan dosya alır
+- Görsel Yükleme Alanı: Kullanıcıdan dosya/dosyalar alır
+- İmage Url Yükleme: Kullanıcıdan string url olarak cdn şeklinde(servesless) olarak resim alabilme, tek olarak
 - Prompt (Metin Girişi) Kutusu: Düzenleme talimatlarını alır
 - Düzenle / Oluştur Butonu: Backend’e isteği gönderir
 - Sonuç Gösterimi: Düzenlenmiş görseli kullanıcıya sunar
 - Görsel İndirme Butonu: Kullanıcı düzenlenmiş görseli indirebilir
 
 Opsiyonel Bonus Özellikler:
-- Önceki düzenleme geçmişi
-- “Önce / Sonra” kaydırıcısı ile görsel karşılaştırması
+- Önceki düzenleme geçmişi , in-memory olarak yükleme geçmişleri gösterildi.
+- “Önce / Sonra” kaydırıcısı ile görsel karşılaştırması, eklenen resimlerin önce ve sonrası yan yana getirildi.
 
 Canlı Deploy:
 - Frontend URL: **Vercel CLI ile deploy edilmiş**
