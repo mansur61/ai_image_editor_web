@@ -8,6 +8,7 @@ void main() {
   runApp(const MyApp());
 }
 
+const local = "http://127.0.0.1:8000";
 const prod = "https://ai-image-editor-web.onrender.com";
 const backendUrl = "$prod/api";
 
