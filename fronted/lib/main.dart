@@ -27,6 +27,14 @@ class MyApp extends StatelessWidget {
   }
 }
 
+class Job {
+  final String prompt;
+  final String imageUrl;
+  final DateTime createdAt;
+
+  Job({required this.prompt, required this.imageUrl, required this.createdAt});
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -38,41 +46,35 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController promptController = TextEditingController();
   final TextEditingController imageUrlController = TextEditingController();
 
-  Uint8List? imageBytes;
-  String? fileName;
+  List<Uint8List> imagesBytes = [];
+  List<String> fileNames = [];
   String? resultUrl;
   bool loading = false;
 
-  Future<void> pickImage() async {
+  List<Job> jobHistory = [];
+
+  // Çoklu dosya seçimi
+  Future<void> pickImages() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       withData: true,
+      allowMultiple: true,
     );
     if (result != null && result.files.isNotEmpty) {
       setState(() {
-        imageBytes = result.files.first.bytes;
-        fileName = result.files.first.name;
+        imagesBytes = result.files.map((f) => f.bytes!).toList();
+        fileNames = result.files.map((f) => f.name).toList();
         imageUrlController.clear();
         resultUrl = null;
       });
-      print("🖼 Image selected: $fileName");
+      print("🖼 ${imagesBytes.length} images selected: $fileNames");
     }
   }
 
+  // Backend’e gönderim
   Future<void> uploadAndEdit() async {
-    if (promptController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter a prompt")),
-      );
-      return;
-    }
-
-    if (imageBytes == null && imageUrlController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please select an image or enter a URL")),
-      );
-      return;
-    }
+    if (promptController.text.isEmpty) return;
+    if (imagesBytes.isEmpty && imageUrlController.text.isEmpty) return;
 
     setState(() => loading = true);
 
@@ -82,54 +84,82 @@ class _HomePageState extends State<HomePage> {
       request.fields['prompt'] = promptController.text;
       request.fields['model'] = 'image-to-image';
 
-      if (imageBytes != null) {
+      // Çoklu resimleri ekle
+      for (int i = 0; i < imagesBytes.length; i++) {
         request.files.add(
           http.MultipartFile.fromBytes(
-            'image',
-            imageBytes!,
-            filename: fileName ?? 'image.png',
+            'images',
+            imagesBytes[i],
+            filename: fileNames[i],
             contentType: MediaType('image', 'png'),
           ),
         );
-      } else if (imageUrlController.text.isNotEmpty) {
-        request.fields['image_url'] = imageUrlController.text.trim();
+      }
+
+      if (imageUrlController.text.isNotEmpty) {
+        request.fields['image_urls'] = imageUrlController.text.trim();
       }
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-
-      print("📩 Raw backend response: ${response.body}");
       final resJson = jsonDecode(response.body);
-print("📩 resJson: $resJson");
+      print("📩 resJson: $resJson");
 
-// Tek URL string olduğu için direkt al
-final imageUrl = resJson['result_url'] as String?;
-if (imageUrl != null && imageUrl.isNotEmpty) {
-  setState(() {
-    resultUrl = imageUrl;
-  });
-} else {
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text("No image returned from server")),
-  );
-}
-
+      final urls = resJson['result_urls'] as List<dynamic>? ?? [];
+      if (urls.isNotEmpty) {
+        setState(() {
+          resultUrl = urls[0]; // ilk resmi göster
+          // job history ekle
+          jobHistory.insert(
+            0,
+            Job(
+              prompt: promptController.text,
+              imageUrl: urls[0],
+              createdAt: DateTime.now(),
+            ),
+          );
+        });
+      } else {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("No image returned")));
+      }
     } catch (e) {
-      print("🔥 Upload Error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Upload Error: $e")),
-      );
+      print("Error: $e");
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Upload Error: $e")));
     } finally {
       setState(() => loading = false);
     }
   }
 
-  Widget buildResultImage() {
-    if (resultUrl == null) return const SizedBox.shrink();
+  // Seçilen resimleri yatay preview
+  Widget buildSelectedImages() {
+    if (imagesBytes.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 150,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: imagesBytes.asMap().entries.map((entry) {
+            return Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: Image.memory(
+                entry.value,
+                width: 150,
+                height: 150,
+                fit: BoxFit.cover,
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
 
-    final now = DateTime.now();
+  // Resmi gösterme ve indirme
+  Widget buildResultImage(String imageUrl, DateTime date) {
     final formattedDate =
-        "${now.day.toString().padLeft(2,'0')}-${now.month.toString().padLeft(2,'0')}-${now.year} ${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}";
+        "${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -138,20 +168,21 @@ if (imageUrl != null && imageUrl.isNotEmpty) {
           alignment: Alignment.topRight,
           children: [
             Image.network(
-              resultUrl!,
+              imageUrl,
               fit: BoxFit.cover,
               width: double.infinity,
               height: 300,
             ),
             IconButton(
               icon: const Icon(Icons.download, color: Colors.white),
-              onPressed: () {
-                final anchor = html.AnchorElement(href: resultUrl!)
-                  ..target = 'blank'
-                  ..download = resultUrl!.split('/').last;
-                html.document.body!.append(anchor);
-                anchor.click();
-                anchor.remove();
+              onPressed: () async {
+                final response = await http.get(Uri.parse(imageUrl));
+                final blob = html.Blob([response.bodyBytes]);
+                final url = html.Url.createObjectUrlFromBlob(blob);
+                final anchor = html.AnchorElement(href: url)
+                  ..download = imageUrl.split('/').last
+                  ..click();
+                html.Url.revokeObjectUrl(url);
               },
             ),
           ],
@@ -177,20 +208,20 @@ if (imageUrl != null && imageUrl.isNotEmpty) {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // GestureDetector içinde hem tıklama hem local preview
                 GestureDetector(
-                  onTap: pickImage,
+                  onTap: pickImages,
                   child: Container(
                     height: 180,
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.blue.shade200),
                     ),
-                    child: Center(
-                      child: (imageBytes != null)
-                          ? Image.memory(imageBytes!, fit: BoxFit.contain)
-                          : const Text("Click to select an image"),
-                    ),
+                    child: imagesBytes.isNotEmpty
+                        ? buildSelectedImages()
+                        : const Center(child: Text("Click to select images")),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -222,7 +253,23 @@ if (imageUrl != null && imageUrl.isNotEmpty) {
                 const SizedBox(height: 16),
                 if (loading) const Center(child: CircularProgressIndicator()),
                 const SizedBox(height: 20),
-                buildResultImage(),
+                // Son işlem resmi
+                if (resultUrl != null) buildResultImage(resultUrl!, DateTime.now()),
+                const SizedBox(height: 20),
+                // Job history
+                const Divider(),
+                const SizedBox(height: 8),
+                const Text("Job History",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Column(
+                  children: jobHistory
+                      .map((job) => Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: buildResultImage(job.imageUrl, job.createdAt),
+                          ))
+                      .toList(),
+                ),
               ],
             ),
           ),

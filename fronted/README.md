@@ -100,17 +100,18 @@ Mimari Genel Görünüm:
       |    etkileşimi       |    yönetimi       |    (seedream-v4)
 
 Bilinen Kısıtlar / Notlar:
-- Render üzerindeki uploads klasörü geçici depolama için kullanılır; uzun süreli saklama yok
+- Render üzerindeki uploads klasörü geçici depolama için kullanılır; uzun süreli saklama yok,
+fakat kullanılmadı her renderda veri kaybı olmaktadır. Base64 olarak verile fal.ai gönderildi.
 - Base64 gönderim tercih edildi, fiziksel URL gerekmez
-- Job history in-memory, veritabanı eklenmedi (opsiyonel)
+- Job history in-memory, veritabanı eklenmedi (opsiyonel) 
+(supabase düşünüldü fakat mesaiden sonra müsait olamadım)
 
 AI Araçları Kullanımı:
-- ChatGPT → Kod tasarımı ve dokümantasyon
-- GitHub Copilot → Kod tamamlama
-- Cursor → Kod navigasyonu ve refactoring
+- ChatGPT kullanıldı 
 
 Teslim Edilecekler:
-- Frontend URL (Vercel)
-- Backend URL (Render.com)
-- GitHub Repo veya ZIP
-- README.txt (bu dosya)
+- Frontend URL (Vercel) : https://fronted-56cbvp09e-mansur61s-projects.vercel.app/
+- Backend URL (Render.com) : https://ai-image-editor-web.onrender.com
+- GitHub Repo veya ZIP : https://github.com/mansur61/ai_image_editor_web/tree/master
+ 
+
