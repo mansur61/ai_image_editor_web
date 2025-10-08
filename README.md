@@ -116,7 +116,7 @@ AI Araçları Kullanımı:
 - ChatGPT kullanıldı 
 
 Teslim Edilecekler:
-- Frontend URL (Vercel) : https://fronted-56cbvp09e-mansur61s-projects.vercel.app/
+- Frontend URL (Vercel) :  https://fronted-2dwdbwduh-mansur61s-projects.vercel.app
 - Backend URL (Render.com) : https://ai-image-editor-web.onrender.com
 - GitHub Repo veya ZIP : https://github.com/mansur61/ai_image_editor_web/tree/master
  
