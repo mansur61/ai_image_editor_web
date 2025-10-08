@@ -45,84 +45,43 @@ def root():
 async def create_job(
     prompt: str = Form(...),
     model: str = Form("image-to-image"),
-    images: Optional[List[UploadFile]] = None,  # çoklu dosya
-    image_urls: Optional[List[str]] = Form(None),  # çoklu URL
+    images: List[UploadFile] = None,  # ✅ Çoklu resim
+    image_urls: str = Form(None)       # Opsiyonel URL string
 ):
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {
-        "status": "processing",
-        "prompt": prompt,
-        "model": model,
-        "result_urls": [],
-    }
+    jobs[job_id] = {"status": "processing", "prompt": prompt, "model": model, "result_urls": []}
 
-    # ✅ Backend’e gönderilecek image_urls listesi
-    final_image_urls = []
+    payload_images = []
 
-    # Dosyalar varsa base64 data URI oluştur
     if images:
         for img in images:
-            img_bytes = await img.read()
-            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-            final_image_urls.append(f"data:{img.content_type};base64,{img_b64}")
-
-    # URL’ler varsa ekle
+            bytes_ = await img.read()
+            b64 = base64.b64encode(bytes_).decode("utf-8")
+            payload_images.append(f"data:{img.content_type};base64,{b64}")
     if image_urls:
-        final_image_urls.extend([url for url in image_urls if url])
+        payload_images.append(image_urls)
 
-    if not final_image_urls:
+    if not payload_images:
         jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = "No image or image_url provided."
+        jobs[job_id]["error"] = "No images provided"
         return {"job_id": job_id, **jobs[job_id]}
 
-    payload = {
-        "prompt": prompt,
-        "model": model,
-        "image_urls": final_image_urls,
-    }
-
-    headers = {
-        "Authorization": f"Key {FAL_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    payload = {"prompt": prompt, "model": model, "image_urls": payload_images}
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                FAL_API_URL,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=180),
-            ) as response:
-
-                raw_text = await response.text()
-                print("Raw backend response:", raw_text)
-
-                if response.status != 200:
-                    jobs[job_id]["status"] = "failed"
-                    jobs[job_id]["error"] = f"Fal.ai error: {raw_text}"
-                    return {"job_id": job_id, **jobs[job_id]}
-
-                data = await response.json()
-
-                # Birden fazla sonuç resmi varsa hepsini al
-                result_urls = []
-                if data.get("images"):
-                    result_urls = [img.get("url") for img in data["images"] if img.get("url")]
-                elif data.get("image"):
-                    result_urls = [data["image"]]
-                elif data.get("output", {}).get("image_url"):
-                    result_urls = [data["output"]["image_url"]]
-
+            async with session.post(FAL_API_URL, headers=headers, json=payload) as resp:
+                data = await resp.json()
+                result_images = data.get("images", [])
+                urls = [img.get("url") for img in result_images if img.get("url")]
                 jobs[job_id]["status"] = "done"
-                jobs[job_id]["result_urls"] = result_urls
+                jobs[job_id]["result_urls"] = urls
                 return {"job_id": job_id, **jobs[job_id]}
-
     except Exception as e:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
         return {"job_id": job_id, **jobs[job_id]}
-
 # ------------------------------------------------------
 # Job durumu sorgulama
 # ------------------------------------------------------
