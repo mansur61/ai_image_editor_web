@@ -75,19 +75,28 @@ async def create_job(
     image: UploadFile = None
 ):
     job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "status": "processing",
+        "prompt": prompt,
+        "model": model,
+        "result_url": None
+    }
 
-    if not image:
-        return JSONResponse(status_code=400, content={"error": "Image file required."})
+    if model != "image-to-image" or not image:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = "Image file required for image-to-image."
+        return {"job_id": job_id, **jobs[job_id]}
 
+    # ✅ Görseli base64 olarak encode et
     image_bytes = await image.read()
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     image_data_uri = f"data:{image.content_type};base64,{image_base64}"
 
+    # ✅ Fal.ai'nin beklediği format
     payload = {
-        "input": {
-            "prompt": prompt,
-            "image_url": image_data_uri
-        }
+        "prompt": prompt,
+        "model": model,
+        "image_urls": [image_data_uri]
     }
 
     headers = {
@@ -101,23 +110,32 @@ async def create_job(
                 FAL_API_URL,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=120)
+                timeout=aiohttp.ClientTimeout(total=180)
             ) as response:
 
-                text = await response.text()
-                print("Raw Response:", text)
+                raw_text = await response.text()
+                print("Raw backend response:", raw_text)
 
                 if response.status != 200:
-                    return JSONResponse(status_code=response.status, content={"error": text})
+                    jobs[job_id]["status"] = "failed"
+                    jobs[job_id]["error"] = f"Fal.ai error: {raw_text}"
+                    return {"job_id": job_id, **jobs[job_id]}
 
                 data = await response.json()
-                image_url = data.get("image") or data.get("output", {}).get("image_url")
+                result_url = (
+                    data.get("image")
+                    or data.get("output", {}).get("image_url")
+                    or (data.get("images", [{}])[0].get("url") if data.get("images") else None)
+                )
 
-                return {"job_id": job_id, "status": "done", "result_url": image_url}
+                jobs[job_id]["status"] = "done"
+                jobs[job_id]["result_url"] = result_url
+                return {"job_id": job_id, **jobs[job_id]}
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        return {"job_id": job_id, **jobs[job_id]}
 
 # ------------------------------------------------------
 # Job durumu sorgulama
